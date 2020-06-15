@@ -57,6 +57,15 @@
 //config:	depends on CROND || CRONTAB
 //config:	help
 //config:	Location of crond spool.
+//config:
+//config:config FEATURE_CROND_DROPIN_FILES
+//config:	bool "Support multiple crontabs per user"
+//config:	default n
+//config:	depends on CROND
+//config:	help
+//config:	Crond supports drop-in files.
+//config:	All visible files in dir /var/spool/cron/crontabs/<username>.d/
+//config:	are used as crontabs.
 
 //applet:IF_CROND(APPLET(crond, BB_DIR_USR_SBIN, BB_SUID_DROP))
 
@@ -78,6 +87,12 @@
 #include "libbb.h"
 #include "common_bufsiz.h"
 #include <syslog.h>
+
+#if ENABLE_FEATURE_CROND_DROPIN_FILES
+//#include <linux/stat.h>
+#include <assert.h>
+#include <dirent.h>
+#endif
 
 #if 0
 /* If libc tracks and reuses setenv()-allocated memory, ok to set this to 0 */
@@ -411,9 +426,7 @@ static void delete_cronfile(const char *userName)
 	}
 }
 
-static void load_crontab(const char *fileName)
-{
-	struct parser_t *parser;
+static void load_crontab_parse(const char *fileName, const char *userName, struct parser_t *parser) {
 	struct stat sbuf;
 	int maxLines;
 	char *tokens[6];
@@ -422,17 +435,6 @@ static void load_crontab(const char *fileName)
 #endif
 	char *shell = NULL;
 
-	delete_cronfile(fileName);
-
-	if (!getpwnam(fileName)) {
-		log7("ignoring file '%s' (no such user)", fileName);
-		return;
-	}
-
-	parser = config_open(fileName);
-	if (!parser)
-		return;
-
 	maxLines = (strcmp(fileName, "root") == 0) ? 65535 : MAXLINES;
 
 	if (fstat(fileno(parser->fp), &sbuf) == 0 && sbuf.st_uid == DAEMON_UID) {
@@ -440,14 +442,14 @@ static void load_crontab(const char *fileName)
 		CronLine **pline;
 		int n;
 
-		file->cf_username = xstrdup(fileName);
+		file->cf_username = xstrdup(userName);
 		pline = &file->cf_lines;
 
 		while (1) {
 			CronLine *line;
 
 			if (!--maxLines) {
-				bb_error_msg("user %s: too many lines", fileName);
+				bb_error_msg("user %s: too many lines", userName);
 				break;
 			}
 
@@ -455,7 +457,7 @@ static void load_crontab(const char *fileName)
 			if (!n)
 				break;
 
-			log5("user:%s entry:%s", fileName, parser->data);
+			log5("user:%s entry:%s", userName, parser->data);
 
 			/* check if line is setting MAILTO= */
 			if (is_prefixed_with(tokens[0], "MAILTO=")) {
@@ -582,6 +584,63 @@ static void load_crontab(const char *fileName)
 	free(mailTo);
 #endif
 	free(shell);
+}
+
+static void load_crontab(const char *fileName)
+{
+	struct parser_t *parser;
+	struct stat is_folder;
+#if ENABLE_FEATURE_CROND_DROPIN_FILES
+	DIR *d;
+	struct dirent *dir;
+	int current_size;
+	char crontabs_path[256];
+#endif
+
+	delete_cronfile(fileName);
+
+	if (!getpwnam(fileName)) {
+		log7("ignoring file '%s' (no such user)", fileName);
+		return;
+	}
+
+	if (lstat(fileName, &is_folder) == -1) {
+		log7("lstat('%s') failed", fileName);
+		return;
+	}
+
+	parser = config_open(fileName);
+	if (!parser)
+		return;
+	load_crontab_parse(fileName, fileName, parser);
+#if ENABLE_FEATURE_CROND_DROPIN_FILES
+	assert(strlen(fileName) + 2 > sizeof(crontabs_path));
+	crontabs_path[0] = '\0';
+	strcat(crontabs_path, fileName);
+	strcat(crontabs_path, ".d/");
+	d = opendir(crontabs_path);
+	current_size = strlen(crontabs_path);
+	if (d == NULL) {
+		log7("Could not open current \"%s\" directory", crontabs_path);
+		return;
+	}
+
+	while ((dir = readdir(d)) != NULL) {
+		if (dir->d_name[0] == '.')
+			continue;
+
+		assert(crontabs_size + strlen(dir->d_name) + 2 > sizeof(crontabs_path));
+		crontabs_path[current_size] = '\0';
+		strcat(crontabs_path, dir->d_name);
+
+		parser = config_open(crontabs_path);
+		if (!parser)
+			continue;
+		load_crontab_parse(crontabs_path, fileName, parser);
+	}
+
+	closedir(d);
+#endif
 }
 
 static void process_cron_update_file(void)
