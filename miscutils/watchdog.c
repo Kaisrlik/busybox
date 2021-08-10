@@ -39,11 +39,12 @@
 //kbuild:lib-$(CONFIG_WATCHDOG) += watchdog.o
 
 //usage:#define watchdog_trivial_usage
-//usage:       "[-t N[ms]] [-T N[ms]] [-F] DEV"
+//usage:       "[-t N[ms]] [-T N[ms]] [-P N[ms]] [-F] DEV"
 //usage:#define watchdog_full_usage "\n\n"
 //usage:       "Periodically write to watchdog device DEV\n"
 //usage:     "\n	-T N	Reboot after N seconds if not reset (default 60)"
 //usage:     "\n	-t N	Reset every N seconds (default 30)"
+//usage:     "\n	-P N	Pretimeout warning N seconds before reboot (default 0)"
 //usage:     "\n	-F	Run in foreground"
 //usage:     "\n"
 //usage:     "\nUse 500ms to specify period in milliseconds"
@@ -110,14 +111,17 @@ int watchdog_main(int argc UNUSED_PARAM, char **argv)
 	unsigned opts;
 	unsigned stimer_duration; /* how often to restart */
 	unsigned htimer_duration = 60000; /* reboots after N ms if not restarted */
+	unsigned ptimer_duration = 0; /* pre-timeout notification N ms before reboot */
 	char *st_arg;
 	char *ht_arg;
+	char *pt_arg;
 
 #define OPT_FOREGROUND  (1 << 0)
 #define OPT_STIMER      (1 << 1)
 #define OPT_HTIMER      (1 << 2)
-	opts = getopt32(argv, "^" "Ft:T:" "\0" "=1"/*must have exactly 1 arg*/,
-				&st_arg, &ht_arg
+#define OPT_PTIMER      (1 << 3)
+	opts = getopt32(argv, "^" "Ft:T:P:" "\0" "=1"/*must have exactly 1 arg*/,
+				&st_arg, &ht_arg, &pt_arg
 	);
 
 	/* We need to daemonize *before* opening the watchdog as many drivers
@@ -145,6 +149,10 @@ int watchdog_main(int argc UNUSED_PARAM, char **argv)
 	htimer_duration = htimer_duration / 1000;
 	ioctl_or_warn(3, WDIOC_SETOPTIONS, (void*) &enable);
 	ioctl_or_warn(3, WDIOC_SETTIMEOUT, &htimer_duration);
+	if (opts & OPT_PTIMER) {
+		ptimer_duration = xatou_sfx(pt_arg, suffixes) / 1000;
+		ioctl_or_warn(3, WDIOC_SETPRETIMEOUT, &ptimer_duration);
+	}
 #if 0
 	ioctl_or_warn(3, WDIOC_GETTIMEOUT, &htimer_duration);
 	printf("watchdog: SW timer is %dms, HW timer is %ds\n",
