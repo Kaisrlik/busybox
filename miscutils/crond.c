@@ -594,7 +594,7 @@ static void load_crontab(const char *fileName)
 	DIR *d;
 	struct dirent *dir;
 	int current_size;
-	char crontabs_path[256];
+	char crontabs_path[128];
 #endif
 
 	delete_cronfile(fileName);
@@ -606,22 +606,21 @@ static void load_crontab(const char *fileName)
 
 	if (lstat(fileName, &is_folder) == -1) {
 		log7("lstat('%s') failed", fileName);
-		return;
+	} else {
+		parser = config_open(fileName);
+		if (parser)
+			load_crontab_parse(fileName, fileName, parser);
 	}
 
-	parser = config_open(fileName);
-	if (!parser)
-		return;
-	load_crontab_parse(fileName, fileName, parser);
 #if ENABLE_FEATURE_CROND_DROPIN_FILES
 	assert(strlen(fileName) + 2 > sizeof(crontabs_path));
 	crontabs_path[0] = '\0';
 	strcat(crontabs_path, fileName);
 	strcat(crontabs_path, ".d/");
-	d = opendir(crontabs_path);
 	current_size = strlen(crontabs_path);
+	d = opendir(crontabs_path);
 	if (d == NULL) {
-		log7("Could not open current \"%s\" directory", crontabs_path);
+		log7("Could not open current '%s' directory", crontabs_path);
 		return;
 	}
 
@@ -633,9 +632,11 @@ static void load_crontab(const char *fileName)
 		crontabs_path[current_size] = '\0';
 		strcat(crontabs_path, dir->d_name);
 
+		delete_cronfile(crontabs_path);
 		parser = config_open(crontabs_path);
 		if (!parser)
 			continue;
+
 		load_crontab_parse(crontabs_path, fileName, parser);
 	}
 
